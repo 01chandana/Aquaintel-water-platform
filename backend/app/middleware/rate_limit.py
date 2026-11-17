@@ -73,3 +73,4 @@ async def login_rate_limit(request: Request) -> None:
     allowed, _, _ = await get_cache().sliding_window(f"rl:auth:{route}:{client_ip(request)}", limit, 60)
     if not allowed:
         raise RateLimitError("Too many authentication attempts, try again in a minute")
+raise RateLimitError("Too many authentication attempts, try again in a minute")|
