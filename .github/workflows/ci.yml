@@ -1,4 +1,6 @@
 # CI/CD pipeline (Ch. 18, Listing 18.1): quality gates -> tests with real services -> images -> deploy.
+# Docker image builds, e2e and deploy jobs are switched off (if: false) because they need
+# external infrastructure (registry access, Kubernetes clusters, secrets) not used in the demo.
 name: AquaIntel CI/CD
 
 on:
@@ -112,7 +114,7 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     needs: [backend-test, frontend]
-    if: github.event_name == 'push'
+    if: false   # disabled: needs the full Docker stack (Kafka, MinIO, Grafana, MLflow)
     steps:
       - uses: actions/checkout@v4
       - name: Start the stack with demo data
@@ -136,7 +138,7 @@ jobs:
   build-images:
     runs-on: ubuntu-latest
     needs: [backend-test, frontend]
-    if: github.event_name == 'push'
+    if: false   # disabled: needs container registry and image scanning setup
     permissions: { contents: read, packages: write }
     strategy:
       matrix:
@@ -167,7 +169,7 @@ jobs:
   deploy-staging:
     runs-on: ubuntu-latest
     needs: [build-images, e2e]
-    if: github.ref == 'refs/heads/develop'
+    if: false   # disabled: needs a staging Kubernetes cluster and secrets
     environment: staging
     steps:
       - uses: actions/checkout@v4
@@ -187,7 +189,7 @@ jobs:
   deploy-production:
     runs-on: ubuntu-latest
     needs: [build-images, e2e]
-    if: github.ref == 'refs/heads/main'
+    if: false   # disabled: needs a production Kubernetes cluster and secrets
     environment: production       # manual approval gate configured on the environment
     steps:
       - uses: actions/checkout@v4
