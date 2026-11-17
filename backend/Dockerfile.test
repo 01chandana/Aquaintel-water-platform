@@ -1,0 +1,10 @@
+# Test image used by CI and `docker compose run`: same dependencies as production plus dev tools.
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY requirements/ requirements/
+RUN pip install -r requirements/prod.txt -r requirements/dev.txt
+COPY . .
+# needs AQUAINTEL_DATABASE_URL pointing at a TimescaleDB/PostgreSQL server with an empty test_aquaintel database
+CMD ["pytest", "tests/", "--cov=app", "--cov-fail-under=80"]

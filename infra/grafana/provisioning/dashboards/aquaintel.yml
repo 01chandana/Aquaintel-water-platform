@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: aquaintel
+    folder: AquaIntel
+    type: file
+    options: { path: /var/lib/grafana/dashboards }

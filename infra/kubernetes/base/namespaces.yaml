@@ -1,0 +1,15 @@
+# Listing 15.2
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aquaintel
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aquaintel-observability
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aquaintel-data

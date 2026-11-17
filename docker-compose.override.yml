@@ -1,0 +1,25 @@
+# Local development overrides (Appendix C.3, Listing C.2). Applied automatically by `docker compose up`.
+# Hot reload for the API and the SPA; services are reachable directly on localhost.
+services:
+  api:
+    build:
+      target: development
+    environment:
+      AQUAINTEL_DEBUG: "true"
+      AQUAINTEL_LOG_LEVEL: "DEBUG"
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+
+  frontend:
+    build:
+      target: development
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000/ws
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+    ports: ["5173:5173"]

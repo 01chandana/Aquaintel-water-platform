@@ -1,0 +1,32 @@
+# Ch. 15.7.1: nightly logical backup with 30-day retention (WAL archiving is configured on the server).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: aquaintel-data
+spec:
+  schedule: "15 1 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: timescale/timescaledb:2.10.3-pg15
+              envFrom: [{ secretRef: { name: postgres-backup-credentials } }]   # PGHOST, PGUSER, PGPASSWORD
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  f=/backups/aquaintel-$(date +%F).dump
+                  pg_dump -Fc -d aquaintel -f "$f"
+                  find /backups -name 'aquaintel-*.dump' -mtime +30 -delete
+                  ls -lh "$f"
+              volumeMounts: [{ name: backups, mountPath: /backups }]
+          volumes:
+            - name: backups
+              persistentVolumeClaim: { claimName: postgres-backups }

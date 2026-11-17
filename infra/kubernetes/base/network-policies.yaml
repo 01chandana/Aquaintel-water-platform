@@ -1,0 +1,62 @@
+# Ch. 15.5.2: default deny, then allow only the flows the architecture needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: aquaintel
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# API and SPA accept traffic from the ingress controller only; Prometheus may scrape the API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-web
+  namespace: aquaintel
+spec:
+  podSelector:
+    matchExpressions: [{ key: app.kubernetes.io/name, operator: In, values: [api, frontend] }]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: aquaintel-observability } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+      ports: [{ port: 8000 }]
+---
+# application pods may reach the data tier (PostgreSQL, Redis, Kafka, MinIO, MLflow) and DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-egress
+  namespace: aquaintel
+spec:
+  podSelector: { matchLabels: { tier: app } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: aquaintel-data } }
+      ports: [{ port: 5432 }, { port: 6379 }, { port: 9092 }, { port: 9000 }, { port: 5000 }]
+    - to:
+        - namespaceSelector: {}
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - ports: [{ port: 587 }, { port: 443 }]   # SMTP / SMS / webhook notifications
+---
+# the database tier only accepts connections from AquaIntel application pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: data-from-app-only
+  namespace: aquaintel-data
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: aquaintel } }
+          podSelector: { matchLabels: { tier: app } }
+    - from:
+        - podSelector: {}          # replication / cluster traffic inside the data namespace

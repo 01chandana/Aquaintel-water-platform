@@ -1,0 +1,19 @@
+# kubectl apply -k infra/kubernetes/base
+# Stateful services (PostgreSQL/TimescaleDB, Redis, Kafka via Strimzi, MinIO) are installed in
+# aquaintel-data by their operators/charts; this base deploys the AquaIntel workloads around them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - config.yaml
+  - api.yaml
+  - frontend.yaml
+  - workers.yaml
+  - ingress.yaml
+  - network-policies.yaml
+  - backup-cronjob.yaml
+images:
+  - name: registry.example.com/aquaintel/api
+    newTag: latest
+  - name: registry.example.com/aquaintel/frontend
+    newTag: latest

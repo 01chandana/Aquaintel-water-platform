@@ -1,0 +1,279 @@
+# AquaIntel full stack (spec Ch. 15.2 container topology, Listing 15.1).
+#
+#   docker compose up -d --build            # production-like stack behind nginx on http://localhost
+#   docker compose --profile elk up -d      # + Elasticsearch / Logstash / Kibana (Ch. 19.4)
+#
+# docker-compose.override.yml is applied automatically for local development (Listing C.2).
+
+x-backend: &backend
+  build:
+    context: ./backend
+    target: production
+  image: aquaintel/api:local
+  env_file: .env
+  environment: &backend-env
+    AQUAINTEL_DATABASE_URL: postgresql+asyncpg://aquaintel:${POSTGRES_PASSWORD:-aquaintel}@postgres:5432/aquaintel
+    AQUAINTEL_REDIS_URL: redis://redis:6379/0
+    AQUAINTEL_CELERY_BROKER_URL: redis://redis:6379/1
+    AQUAINTEL_CELERY_RESULT_BACKEND: redis://redis:6379/2
+    AQUAINTEL_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    AQUAINTEL_EVENT_BUS: kafka
+    AQUAINTEL_TASK_MODE: celery
+    AQUAINTEL_ML_ORCHESTRATOR: airflow     # Airflow DAGs own the retraining calendar
+    AQUAINTEL_MLFLOW_TRACKING_URI: http://mlflow:5000
+    AQUAINTEL_MINIO_ENDPOINT: minio:9000
+    AQUAINTEL_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+    AQUAINTEL_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    AQUAINTEL_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env (min 32 chars)}
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    kafka: { condition: service_healthy }
+  restart: unless-stopped
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["80:80"]
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on: [frontend, api]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: production
+    image: aquaintel/frontend:local
+    expose: ["3000"]
+    restart: unless-stopped
+
+  # schema migrations run once before the API starts
+  migrate:
+    <<: *backend
+    command: alembic upgrade head
+    restart: "no"
+
+  api:
+    <<: *backend
+    expose: ["8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # Kafka telemetry.raw -> validation -> TimescaleDB -> rules -> telemetry.processed (Ch. 5.3)
+  stream-processor:
+    <<: *backend
+    command: python -m app.integration.kafka_consumer
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  celery-worker:
+    <<: *backend
+    command: celery -A app.workers.celery_app worker --loglevel=info -Q celery,kpi,alerts,reports,ml --concurrency=4
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  celery-beat:
+    <<: *backend
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  # MQTT edge devices -> ingestion API -> Kafka (Ch. 5.3.1 steps 1-2): docker compose --profile edge up -d
+  mqtt-bridge:
+    <<: *backend
+    command: python -m app.integration.mqtt_bridge
+    profiles: ["edge"]
+    environment:
+      <<: *backend-env
+      AQUAINTEL_MQTT_BROKER: mqtt://mosquitto:1883
+      AQUAINTEL_INGEST_API_URL: http://api:8000/v1
+      AQUAINTEL_INTEGRATION_API_KEY: ${INTEGRATION_API_KEY:-}
+    depends_on: [mosquitto, api]
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    command: mosquitto -c /mosquitto-no-auth.conf
+    profiles: ["edge"]
+    ports: ["1883:1883"]
+    restart: unless-stopped
+
+  # ---- demo data: docker compose --profile demo up -d ----
+  # seeds users, assets, rules, 60 days of history and the five models, then writes the integration key
+  seed:
+    <<: *backend
+    command: python scripts/seed_dev_data.py
+    profiles: ["demo"]
+    volumes: [backend_var:/app/var]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: "no"
+
+  # synthetic SCADA feed: posts to the ingestion API with the seeded integration key
+  simulator:
+    <<: *backend
+    command: python scripts/simulate_live.py --api-url http://api:8000/v1 --interval 15
+    profiles: ["demo"]
+    volumes: [backend_var:/app/var]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      api: { condition: service_healthy }
+
+  airflow:
+    build: ./airflow
+    image: aquaintel/airflow:local
+    command: standalone
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://aquaintel:${POSTGRES_PASSWORD:-aquaintel}@postgres:5432/airflow
+      AIRFLOW_VAR_AQUAINTEL_API_URL: http://api:8000/v1
+      AIRFLOW_VAR_AQUAINTEL_API_KEY: ${AIRFLOW_API_KEY:-}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+  postgres:
+    image: timescale/timescaledb:2.10.3-pg15
+    environment:
+      POSTGRES_DB: aquaintel
+      POSTGRES_USER: aquaintel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aquaintel}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aquaintel -d aquaintel"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes: [redis_data:/data]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 10
+    restart: unless-stopped
+
+  # single-node KRaft broker; topics are created by kafka-init with the partitioning in Table 5.2
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    environment:
+      CLUSTER_ID: aquaintel-kraft-cluster-01
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://kafka:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes: [kafka_data:/var/lib/kafka/data]
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      kafka: { condition: service_healthy }
+    entrypoint: ["/bin/bash", "/init/create-topics.sh"]
+    volumes:
+      - ./infra/kafka/create-topics.sh:/init/create-topics.sh:ro
+    restart: "no"
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes: [minio_data:/data]
+    ports: ["9000:9000", "9001:9001"]
+    restart: unless-stopped
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.17.2
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts
+    volumes: [mlflow_data:/mlflow]
+    ports: ["5000:5000"]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./infra/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    ports: ["9090:9090"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  # ---- optional log pipeline (Ch. 19.4): docker compose --profile elk up -d ----
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.2
+    profiles: ["elk"]
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    volumes: [es_data:/usr/share/elasticsearch/data]
+    ports: ["9200:9200"]
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.15.2
+    profiles: ["elk"]
+    volumes:
+      - ./infra/elk/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    ports: ["5044:5044"]
+    depends_on: [elasticsearch]
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.2
+    profiles: ["elk"]
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports: ["5601:5601"]
+    depends_on: [elasticsearch]
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  minio_data:
+  mlflow_data:
+  prometheus_data:
+  es_data:
+  backend_var:

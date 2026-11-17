@@ -1,0 +1,26 @@
+# Ch. 15.5.1: nginx ingress, TLS from cert-manager, WebSocket upgrade, 1000 req/s per client IP
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aquaintel
+  namespace: aquaintel
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/limit-rps: "1000"
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"   # long-lived /ws connections
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location = /metrics { return 404; }
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [app.aquaintel.io]
+      secretName: aquaintel-tls
+  rules:
+    - host: app.aquaintel.io
+      http:
+        paths:
+          - { path: /v1, pathType: Prefix, backend: { service: { name: api, port: { number: 8000 } } } }
+          - { path: /ws, pathType: Prefix, backend: { service: { name: api, port: { number: 8000 } } } }
+          - { path: /, pathType: Prefix, backend: { service: { name: frontend, port: { number: 3000 } } } }

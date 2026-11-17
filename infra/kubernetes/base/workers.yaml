@@ -1,0 +1,106 @@
+# Background processing: Celery workers (scaled on queue depth), a single beat scheduler,
+# and the Kafka stream processor (one consumer per partition at most).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: aquaintel
+  labels: { app.kubernetes.io/name: celery-worker, app.kubernetes.io/part-of: aquaintel }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: celery-worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: celery-worker, app.kubernetes.io/part-of: aquaintel, tier: app }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: worker
+          image: registry.example.com/aquaintel/api:latest
+          command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info",
+                    "-Q", "celery,kpi,alerts,reports,ml", "--concurrency=4"]
+          envFrom:
+            - configMapRef: { name: aquaintel-api-config }
+            - secretRef: { name: aquaintel-api-secrets }
+          resources:
+            requests: { cpu: "2", memory: 4Gi }
+            limits: { cpu: "4", memory: 6Gi }
+      terminationGracePeriodSeconds: 120   # let running KPI / training tasks finish
+---
+# Queue-depth autoscaling (Ch. 15.4.2). Requires KEDA in the cluster.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: celery-worker
+  namespace: aquaintel
+spec:
+  scaleTargetRef: { name: celery-worker }
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.aquaintel-data:6379
+        databaseIndex: "1"
+        listName: kpi
+        listLength: "50"
+    - type: redis
+      metadata:
+        address: redis.aquaintel-data:6379
+        databaseIndex: "1"
+        listName: reports
+        listLength: "20"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-beat
+  namespace: aquaintel
+  labels: { app.kubernetes.io/name: celery-beat, app.kubernetes.io/part-of: aquaintel }
+spec:
+  replicas: 1                      # exactly one scheduler, otherwise jobs fire twice
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: celery-beat }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: celery-beat, app.kubernetes.io/part-of: aquaintel, tier: app }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: beat
+          image: registry.example.com/aquaintel/api:latest
+          command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info",
+                    "--schedule", "/tmp/celerybeat-schedule"]
+          envFrom:
+            - configMapRef: { name: aquaintel-api-config }
+            - secretRef: { name: aquaintel-api-secrets }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-processor
+  namespace: aquaintel
+  labels: { app.kubernetes.io/name: stream-processor, app.kubernetes.io/part-of: aquaintel }
+spec:
+  replicas: 3                      # consumer group "stream-processor"; <= telemetry.raw partitions (12)
+  selector:
+    matchLabels: { app.kubernetes.io/name: stream-processor }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: stream-processor, app.kubernetes.io/part-of: aquaintel, tier: app }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: processor
+          image: registry.example.com/aquaintel/api:latest
+          command: ["python", "-m", "app.integration.kafka_consumer"]
+          envFrom:
+            - configMapRef: { name: aquaintel-api-config }
+            - secretRef: { name: aquaintel-api-secrets }
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "2", memory: 2Gi }

@@ -1,0 +1,51 @@
+# Platform alert rules (Ch. 19.7.1). Severity label maps to the P1/P2 on-call priorities.
+# Infrastructure rules (CPU, memory, disk) come from node/kube exporters in the cluster stack.
+groups:
+  - name: aquaintel-api
+    rules:
+      - alert: ApiErrorRateHigh
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 1) > 0.05
+        for: 5m
+        labels: { severity: P1 }
+        annotations: { summary: "API 5xx rate above 5% for 5 minutes" }
+
+      - alert: ApiLatencyP95High
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+        for: 5m
+        labels: { severity: P2 }
+        annotations: { summary: "API P95 latency above 1 s" }
+
+      - alert: DatabasePoolSaturated
+        expr: db_connection_pool_size > 24   # 80% of pool_size 20 + max_overflow 10
+        for: 5m
+        labels: { severity: P2 }
+        annotations: { summary: "Database connection pool above 80%" }
+
+  - name: aquaintel-pipeline
+    rules:
+      - alert: TelemetryIngestionLag
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(telemetry_ingestion_lag_seconds_bucket[5m]))) > 60
+        for: 2m
+        labels: { severity: P1 }
+        annotations: { summary: "Telemetry is arriving more than 60 s after it was measured" }
+
+      - alert: TelemetryRejectionsSpike
+        expr: sum(rate(telemetry_rejected_total[10m])) / clamp_min(sum(rate(telemetry_ingestion_rate[10m])), 1) > 0.05
+        for: 10m
+        labels: { severity: P2 }
+        annotations: { summary: "More than 5% of incoming points fail validation" }
+
+  - name: aquaintel-ml
+    rules:
+      - alert: ModelFeatureDrift
+        expr: max by (model) (ml_feature_drift_psi) > 0.2
+        labels: { severity: P3 }
+        annotations: { summary: "Feature drift (PSI > 0.2) on {{ $labels.model }}: retraining recommended" }
+
+      - alert: InferenceLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le, model) (rate(ml_inference_latency_seconds_bucket[5m]))) > 0.1
+        for: 5m
+        labels: { severity: P2 }
+        annotations: { summary: "{{ $labels.model }} P95 inference latency above 100 ms" }

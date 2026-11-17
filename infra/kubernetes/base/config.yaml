@@ -1,0 +1,38 @@
+# Appendix C.4. Secrets are placeholders: in a real cluster they come from a sealed secret / external secrets
+# operator backed by KMS (Ch. 17), never from this file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aquaintel-api-config
+  namespace: aquaintel
+data:
+  AQUAINTEL_ENVIRONMENT: "production"
+  AQUAINTEL_DEBUG: "false"
+  AQUAINTEL_LOG_LEVEL: "INFO"
+  AQUAINTEL_REDIS_URL: "redis://redis.aquaintel-data:6379/0"
+  AQUAINTEL_CELERY_BROKER_URL: "redis://redis.aquaintel-data:6379/1"
+  AQUAINTEL_CELERY_RESULT_BACKEND: "redis://redis.aquaintel-data:6379/2"
+  AQUAINTEL_KAFKA_BOOTSTRAP_SERVERS: "aquaintel-kafka-bootstrap.aquaintel-data:9092"
+  AQUAINTEL_EVENT_BUS: "kafka"
+  AQUAINTEL_TASK_MODE: "celery"
+  AQUAINTEL_ML_ORCHESTRATOR: "airflow"
+  AQUAINTEL_MLFLOW_TRACKING_URI: "http://mlflow.aquaintel-data:5000"
+  AQUAINTEL_MINIO_ENDPOINT: "minio.aquaintel-data:9000"
+  AQUAINTEL_CORS_ORIGINS: "https://app.aquaintel.io"
+  AQUAINTEL_JWT_EXPIRY_MINUTES: "60"
+  AQUAINTEL_JWT_REFRESH_DAYS: "7"
+  AQUAINTEL_RATE_LIMIT_ENABLED: "true"
+  AQUAINTEL_TZ: "UTC"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aquaintel-api-secrets
+  namespace: aquaintel
+type: Opaque
+stringData:
+  AQUAINTEL_SECRET_KEY: "replace-with-a-32+-char-secret"
+  AQUAINTEL_DATABASE_URL: "postgresql+asyncpg://aquaintel:replace-me@postgres.aquaintel-data:5432/aquaintel"
+  AQUAINTEL_MINIO_ACCESS_KEY: "replace-me"
+  AQUAINTEL_MINIO_SECRET_KEY: "replace-me"
+  AQUAINTEL_SMTP_PASSWORD: "replace-me"
