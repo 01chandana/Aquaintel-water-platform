@@ -37,11 +37,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("authorization", "")
         api_key = request.headers.get("x-api-key")
         if path.endswith(BULK_PATHS):
-            ident, limit = f"bulk:{sha256(api_key or auth or client_ip(request) or "anonymous")[:16]}", settings.rate_limit_bulk_per_minute
+            bulk_source = api_key or auth or client_ip(request) or "anonymous"
+            bulk_hash = sha256(bulk_source)[:16]
+            ident = f"bulk:{bulk_hash}"
+            limit = settings.rate_limit_bulk_per_minute
         elif auth.startswith("Bearer ") or api_key:
-            ident, limit = f"tok:{sha256(api_key or auth)[:16]}", settings.rate_limit_authenticated_per_minute
+            token_hash = sha256(api_key or auth)[:16]
+            ident = f"tok:{token_hash}"
+            limit = settings.rate_limit_authenticated_per_minute
         else:
-            ident, limit = f"ip:{client_ip(request)}", settings.rate_limit_global_per_minute
+            ident = f"ip:{client_ip(request)}"
+            limit = settings.rate_limit_global_per_minute
 
         allowed, remaining, reset = await get_cache().sliding_window(f"rl:{ident}", limit, 60)
         headers = {
