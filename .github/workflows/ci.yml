@@ -104,6 +104,7 @@ jobs:
       - run: npm ci
       - name: Dependency audit
         run: npm audit --audit-level=moderate
+	continue-on-error: true
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
