@@ -6,6 +6,14 @@ and regulatory compliance reporting. It is built to the *AquaIntel Software Arch
 Specification v1.0*. Each requirement is traced to code in
 [`docs/REQUIREMENTS_TRACEABILITY.md`](docs/REQUIREMENTS_TRACEABILITY.md).
 
+## Screenshots
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/04083ecf-c78a-405a-b055-fcc4703741e9" />### Executive overview
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/d43bf635-58a5-4a60-b0f9-b0cb8155f0f8" />### Alert center
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/06c7e0a4-8a94-4d92-a0a6-81216b97ada7" />### ML models
+
+
+
+
 | Layer | Technology (spec Ch. 4) |
 |---|---|
 | Frontend | React 18, TypeScript (strict), Vite 8, React Router 7, Redux Toolkit + RTK Query, MUI 5, Recharts + D3, React Hook Form + Zod 4, react-window |
