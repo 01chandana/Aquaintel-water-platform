@@ -9,8 +9,10 @@ Specification v1.0*. Each requirement is traced to code in
 ## Screenshots
 ### Executive overview
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/04083ecf-c78a-405a-b055-fcc4703741e9" />
+
 ### Alert center
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/d43bf635-58a5-4a60-b0f9-b0cb8155f0f8" />
+
 ### ML models
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/06c7e0a4-8a94-4d92-a0a6-81216b97ada7" />
 
